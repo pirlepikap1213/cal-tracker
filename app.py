@@ -1,4 +1,17 @@
 import streamlit as st
+
+# ページの基本設定 ＆ 自動翻訳防止のHTMLを差し込む
+st.set_page_config(page_title="AI食事カロリー・PFC記録", page_icon="🥗", layout="centered")
+
+# 自動翻訳による DOM 衝突（removeChild エラー）を防ぐ設定
+st.markdown("""
+    <html lang="ja" class="notranslate" translate="no">
+    <head>
+        <meta name="google" content="notranslate" />
+    </head>
+""", unsafe_allow_html=True)
+
+import streamlit as st
 import pandas as pd
 from datetime import datetime
 import json
