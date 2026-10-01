@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime
+from zoneinfo import ZoneInfo  # 日本時間（JST）取得用
 import json
 import base64
 from openai import OpenAI
@@ -14,6 +15,10 @@ st.markdown("""
         <meta name="google" content="notranslate" />
     </head>
 """, unsafe_allow_html=True)
+
+# 日本時間の現在日時を取得する関数
+def get_now_jst():
+    return datetime.now(ZoneInfo("Asia/Tokyo"))
 
 # --- APIキー＆目標カロリーの設定 ---
 api_key = st.secrets.get("OPENAI_API_KEY")
@@ -47,7 +52,8 @@ st.title("🥗 AI食事カロリー記録")
 # ==========================================
 # 1. 本日の進捗状況（ダッシュボード）
 # ==========================================
-today_str = datetime.now().strftime("%Y-%m-%d")
+# 日本時間での今日の年月日を取得
+today_str = get_now_jst().strftime("%Y-%m-%d")
 today_calories = 0
 
 if not df_log.empty:
@@ -131,14 +137,14 @@ if st.button("AIで解析して記録", type="primary", use_container_width=True
                 food_name = result.get("food_name", "食事記録")
                 calories = int(result.get("calories", 0))
 
-                now = datetime.now()
+                # 日本時間で記録
+                now = get_now_jst()
                 new_data = pd.DataFrame([{
                     "日付": now,
                     "食品名": food_name,
                     "推定カロリー(kcal)": calories
                 }])
                 
-                # 必要最小限の列に揃えて追加
                 df_log_save = pd.concat([df_log[["日付", "食品名", "推定カロリー(kcal)"]], new_data], ignore_index=True)
                 save_data(df_log_save)
                 
@@ -156,7 +162,6 @@ st.divider()
 # 3. 本日の記録編集＆過去ログ（タップして表示）
 # ==========================================
 if not df_log.empty:
-    # 削除・編集用のデータセット作成
     df_display = df_log.copy()
     df_display["年月日"] = pd.to_datetime(df_display["日付"]).dt.strftime("%Y-%m-%d")
     df_display["日時"] = pd.to_datetime(df_display["日付"]).dt.strftime("%Y-%m-%d %H:%M")
@@ -168,7 +173,6 @@ if not df_log.empty:
     if not today_records.empty:
         st.caption("食品名やカロリーを直接タップして編集できます。削除する場合は「削除」欄にチェックを入れてください。")
         
-        # 編集可能なデータエディタ（食品名とカロリーが直接編集できます）
         today_records_edit = today_records[["日時", "食品名", "推定カロリー(kcal)"]].copy()
         today_records_edit.insert(0, "削除", False)
         
@@ -183,15 +187,12 @@ if not df_log.empty:
         )
 
         if st.button("変更・削除を保存", type="secondary"):
-            # 削除にチェックが入っていないものを残す
             keep_indices = today_records.index[~edited_today["削除"]]
             
-            # 編集後の値を元のdf_logに反映
             for idx, (_, row) in zip(keep_indices, edited_today[~edited_today["削除"]].iterrows()):
                 df_log.loc[idx, "食品名"] = row["食品名"]
                 df_log.loc[idx, "推定カロリー(kcal)"] = row["推定カロリー(kcal)"]
 
-            # チェックされた削除行を全体のログから除外
             remove_indices = today_records.index[edited_today["削除"]]
             df_log_updated = df_log.drop(index=remove_indices)
 
@@ -208,7 +209,6 @@ if not df_log.empty:
     
     with st.expander("📂 過去の記録を見る（タップで開く）"):
         if not past_records.empty:
-            # 日別合計サマリー
             past_daily = past_records.groupby("年月日")["推定カロリー(kcal)"].sum().reset_index()
             past_daily = past_daily.sort_values(by="年月日", ascending=False)
             
