@@ -4,6 +4,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo  # 日本時間（JST）取得用
 import json
 import base64
+import os
 from openai import OpenAI
 
 # --- ページ基本設定 ＆ ブラウザ自動翻訳エラー防止 ---
@@ -20,7 +21,7 @@ st.markdown("""
 def get_now_jst():
     return datetime.now(ZoneInfo("Asia/Tokyo"))
 
-# --- APIキー＆目標カロリーの初期化 ---
+# --- APIキーの設定 ---
 api_key = st.secrets.get("OPENAI_API_KEY")
 
 if not api_key:
@@ -29,9 +30,26 @@ if not api_key:
 
 client = OpenAI(api_key=api_key)
 
-# セッション状態に目標カロリーを保持（初期値はSecretsから、なければ2000）
+# --- 設定（目標カロリー）の読み込み・保存処理 ---
+SETTINGS_FILE = "settings.json"
+
+def load_target_calories():
+    default_calories = int(st.secrets.get("TARGET_CALORIES", 2000))
+    if os.path.exists(SETTINGS_FILE):
+        try:
+            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return int(data.get("target_calories", default_calories))
+        except Exception:
+            return default_calories
+    return default_calories
+
+def save_target_calories(calories):
+    with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+        json.dump({"target_calories": calories}, f)
+
 if "target_calories" not in st.session_state:
-    st.session_state["target_calories"] = int(st.secrets.get("TARGET_CALORIES", 2000))
+    st.session_state["target_calories"] = load_target_calories()
 
 # --- CSVデータの読み込み・保存処理 ---
 CSV_FILE = "food_log.csv"
@@ -53,7 +71,7 @@ df_log = load_data()
 st.title("🥗 AI食事カロリー記録")
 
 # ==========================================
-# 目標カロリー変更設定（サイドバーまたは折りたたみ）
+# 目標カロリー変更設定（サイドバー）
 # ==========================================
 with st.sidebar:
     st.header("⚙️ 設定")
@@ -66,7 +84,8 @@ with st.sidebar:
     )
     if new_target != st.session_state["target_calories"]:
         st.session_state["target_calories"] = new_target
-        st.success("目標カロリーを変更しました！")
+        save_target_calories(new_target)  # ファイルへ保存
+        st.success("目標カロリーを保存しました！")
 
 target_calories = st.session_state["target_calories"]
 
@@ -81,13 +100,20 @@ if not df_log.empty:
     today_df = df_log[df_log["年月日"] == today_str]
     today_calories = int(today_df["推定カロリー(kcal)"].sum())
 
-# 進捗バーと数値インジケーター
+# 進捗率
 progress = min(today_calories / target_calories, 1.0)
 st.progress(progress)
 
 col1, col2 = st.columns(2)
 col1.metric("本日の合計", f"{today_calories:,} kcal", delta=f"{today_calories - target_calories} kcal (目標比)", delta_color="inverse")
 col2.metric("目標カロリー", f"{target_calories:,} kcal")
+
+# 目標達成時の演出
+if today_calories >= target_calories and target_calories > 0:
+    st.success("🎉 **!目標\\(^O^)/達成！** 🎉", icon="🔥")
+    if "celebrated" not in st.session_state:
+        st.balloons()
+        st.session_state["celebrated"] = True
 
 st.divider()
 
@@ -96,7 +122,7 @@ st.divider()
 # ==========================================
 st.subheader("📝 食事を記録")
 
-tab1, tab2, tab3 = st.tabs(["📷 カメラで撮影", "📁 写真を選択", "💬 テキスト入力"])
+tab1, tab2, tab3 = st.tabs(["📷 カメラ", "📁 写真", "💬 テキスト"])
 
 uploaded_image_bytes = None
 food_input = None
@@ -168,6 +194,10 @@ if st.button("AIで解析して記録", type="primary", use_container_width=True
                 df_log_save = pd.concat([df_log[["日付", "食品名", "推定カロリー(kcal)"]], new_data], ignore_index=True)
                 save_data(df_log_save)
                 
+                # 達成フラグをリセットして再判定できるようにする
+                if "celebrated" in st.session_state:
+                    del st.session_state["celebrated"]
+
                 st.success(f"「{food_name}」（約 {calories} kcal）を記録しました！")
                 st.rerun()
 
@@ -184,39 +214,44 @@ st.divider()
 if not df_log.empty:
     df_display = df_log.copy()
     df_display["年月日"] = pd.to_datetime(df_display["日付"]).dt.strftime("%Y-%m-%d")
-    df_display["日時"] = pd.to_datetime(df_display["日付"]).dt.strftime("%Y-%m-%d %H:%M")
 
     # --- 本日の記録＆編集・削除 ---
     st.subheader("✏️ 本日の記録・編集")
     today_records = df_display[df_display["年月日"] == today_str]
 
     if not today_records.empty:
-        st.caption("食品名やカロリーを直接タップして編集できます。削除する場合は「削除」欄にチェックを入れてください。")
+        st.caption("食品名やカロリーを直接タップして編集できます。")
         
-        today_records_edit = today_records[["日時", "食品名", "推定カロリー(kcal)"]].copy()
-        today_records_edit.insert(0, "削除", False)
+        # 横スクロール不要化のため、時刻列を外し列項目を最小限に絞る
+        today_records_edit = today_records[["食品名", "推定カロリー(kcal)"]].copy()
+        today_records_edit.insert(0, "消", False)
         
         edited_today = st.data_editor(
             today_records_edit,
             column_config={
-                "推定カロリー(kcal)": st.column_config.NumberColumn("カロリー(kcal)", min_value=0, step=10, format="%d kcal"),
-                "日時": st.column_config.TextColumn("日時", disabled=True)
+                "消": st.column_config.CheckboxColumn("消", width="small", default=False),
+                "食品名": st.column_config.TextColumn("品名", width="medium"),
+                "推定カロリー(kcal)": st.column_config.NumberColumn("kcal", width="small", min_value=0, step=10, format="%d")
             },
             hide_index=True,
             use_container_width=True
         )
 
-        if st.button("変更・削除を保存", type="secondary"):
-            keep_indices = today_records.index[~edited_today["削除"]]
+        if st.button("変更・削除を保存", type="secondary", use_container_width=True):
+            keep_indices = today_records.index[~edited_today["消"]]
             
-            for idx, (_, row) in zip(keep_indices, edited_today[~edited_today["削除"]].iterrows()):
+            for idx, (_, row) in zip(keep_indices, edited_today[~edited_today["消"]].iterrows()):
                 df_log.loc[idx, "食品名"] = row["食品名"]
                 df_log.loc[idx, "推定カロリー(kcal)"] = row["推定カロリー(kcal)"]
 
-            remove_indices = today_records.index[edited_today["削除"]]
+            remove_indices = today_records.index[edited_today["消"]]
             df_log_updated = df_log.drop(index=remove_indices)
 
             save_data(df_log_updated[["日付", "食品名", "推定カロリー(kcal)"]])
+            
+            if "celebrated" in st.session_state:
+                del st.session_state["celebrated"]
+
             st.success("記録を更新しました。")
             st.rerun()
     else:
@@ -224,20 +259,34 @@ if not df_log.empty:
 
     st.write("")
 
-    # --- 過去の記録（折りたたみ/アコーディオン） ---
+    # --- 過去の記録（アコーディオン） ---
     past_records = df_display[df_display["年月日"] != today_str]
     
-    with st.expander("📂 過去の記録を見る（タップで開く）"):
+    with st.expander("📂 過去の記録を見る"):
         if not past_records.empty:
             past_daily = past_records.groupby("年月日")["推定カロリー(kcal)"].sum().reset_index()
             past_daily = past_daily.sort_values(by="年月日", ascending=False)
             
-            st.write("▼ 日別合計一覧")
-            st.dataframe(past_daily, use_container_width=True, hide_index=True)
-
-            st.write("▼ 過去の全詳細履歴")
+            st.write("▼ 日別合計")
             st.dataframe(
-                past_records[["日時", "食品名", "推定カロリー(kcal)"]].sort_values(by="日時", ascending=False),
+                past_daily,
+                column_config={
+                    "年月日": st.column_config.TextColumn("日付", width="medium"),
+                    "推定カロリー(kcal)": st.column_config.NumberColumn("合計(kcal)", width="medium", format="%d kcal")
+                },
+                use_container_width=True,
+                hide_index=True
+            )
+
+            st.write("▼ 過去の全詳細")
+            past_records["日付表示"] = pd.to_datetime(past_records["日付"]).dt.strftime("%m/%d %H:%M")
+            st.dataframe(
+                past_records[["日付表示", "食品名", "推定カロリー(kcal)"]].sort_values(by="日付表示", ascending=False),
+                column_config={
+                    "日付表示": st.column_config.TextColumn("日時", width="small"),
+                    "食品名": st.column_config.TextColumn("品名", width="medium"),
+                    "推定カロリー(kcal)": st.column_config.NumberColumn("kcal", width="small", format="%d")
+                },
                 use_container_width=True,
                 hide_index=True
             )
