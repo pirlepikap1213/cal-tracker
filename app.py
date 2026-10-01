@@ -20,15 +20,18 @@ st.markdown("""
 def get_now_jst():
     return datetime.now(ZoneInfo("Asia/Tokyo"))
 
-# --- APIキー＆目標カロリーの設定 ---
+# --- APIキー＆目標カロリーの初期化 ---
 api_key = st.secrets.get("OPENAI_API_KEY")
-target_calories = st.secrets.get("TARGET_CALORIES", 2000)
 
 if not api_key:
     st.error("OPENAI_API_KEY が設定されていません。Streamlit Cloudの Secrets から設定してください。")
     st.stop()
 
 client = OpenAI(api_key=api_key)
+
+# セッション状態に目標カロリーを保持（初期値はSecretsから、なければ2000）
+if "target_calories" not in st.session_state:
+    st.session_state["target_calories"] = int(st.secrets.get("TARGET_CALORIES", 2000))
 
 # --- CSVデータの読み込み・保存処理 ---
 CSV_FILE = "food_log.csv"
@@ -50,9 +53,26 @@ df_log = load_data()
 st.title("🥗 AI食事カロリー記録")
 
 # ==========================================
+# 目標カロリー変更設定（サイドバーまたは折りたたみ）
+# ==========================================
+with st.sidebar:
+    st.header("⚙️ 設定")
+    new_target = st.number_input(
+        "1日の目標カロリー (kcal)",
+        min_value=500,
+        max_value=10000,
+        value=st.session_state["target_calories"],
+        step=50
+    )
+    if new_target != st.session_state["target_calories"]:
+        st.session_state["target_calories"] = new_target
+        st.success("目標カロリーを変更しました！")
+
+target_calories = st.session_state["target_calories"]
+
+# ==========================================
 # 1. 本日の進捗状況（ダッシュボード）
 # ==========================================
-# 日本時間での今日の年月日を取得
 today_str = get_now_jst().strftime("%Y-%m-%d")
 today_calories = 0
 
